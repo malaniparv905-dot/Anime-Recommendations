@@ -5,20 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anime Recommendation</title>
   <style>
-@import url('https://fonts.googleapis.com/css2?family=Jost:ital,wght@0,100..900;1,100..900&display=swap');
-
+@import url('https://fonts.googleapis.com/css2?family=Jost:ital,wght@0,100..900;1,100..900&family=Orbitron:wght@400;700&display=swap');
 
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
-body {
-    background-color: #001d39;
-}
+
+    body {
+      background-color: #05071a;
+      font-family: "Jost", sans-serif;
+      color: #e0f7fa;
+    }
 
     nav {
-      background-color: rgb(17, 205, 219);
+      background-color: #0072ff;
+      padding: 12px 0;
     }
 
     nav ul li a {
@@ -26,22 +29,26 @@ body {
       text-decoration: none;
       font-size: 18px;
       justify-content: space-between;
+      font-weight: 500;
     }
 
     #service {
-      background-color: #001d39;
+      background-color: transparent;
       height: 100%;
     }
 
     #service > p {
       font-size: 56px;
       text-align: center;
-      color: aqua;
+      color: #00e5ff;
       padding-left: 100px;
       padding-right: 100px;
       padding-top: 50px;
-      font-family: sans-serif;
-      font-weight: 600;
+      font-family: "Orbitron", sans-serif;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      text-shadow: 0 0 12px rgba(0, 229, 255, 0.6);
     }
 
     .services-container,
@@ -56,38 +63,55 @@ body {
     .service-box {
       overflow: hidden;
       display: flex;
-      border-radius: 44px;
-      background-color: rgb(29, 27, 25);
-      color: beige;
+      align-items: center;
+      border-radius: 32px;
+      background-color: rgba(255, 255, 255, 0.05);
+      color: #e0f7fa;
       width: 30%;
-      transition: 0.3s ease;
+      backdrop-filter: blur(10px);
+      transition: 0.4s ease;
+      border: 1px solid rgba(0, 229, 255, 0.1);
+      box-shadow: 0 0 20px rgba(0, 229, 255, 0.05);
     }
 
     .service-box p {
-        display: flex;
-        align-items: center;
-        padding-left: 5px;
-        font-family: "Jost", sans-serif;
+      display: flex;
+      align-items: center;
+      padding-left: 15px;
+      font-family: "Jost", sans-serif;
+      font-size: 18px;
+      text-transform: capitalize;
+      font-weight: 500;
     }
 
     .service-box img {
-        width: 150px;
+      width: 150px;
       height: 150px;
-      border-radius: 44px;
+      border-radius: 24px;
       object-fit: cover;
+      margin: 10px;
     }
 
     .service-box:hover {
-      background-color: rgb(33, 31, 28);
-      transform: scale(1.05);
+      background-color: rgba(0, 229, 255, 0.1);
+      transform: scale(1.06);
+      box-shadow: 0 0 30px rgba(0, 229, 255, 0.25);
     }
 
     #demon img {
       display: block;
       margin: auto;
     }
-
-
+    div>.service-box>a{
+      color: white;
+      text-decoration: none;
+      font-family: "Jost", sans-serif;
+      text-transform: capitalize;
+      font-weight: 500;
+    }
+    div>.service-box>a:hover{
+      color: #00e5ff;
+    }
   </style>
 </head>
 
@@ -98,95 +122,86 @@ body {
 
       <div class="services-container">
         <div class="service-box">
-          <img src="./undefined (1).jpeg" alt="Demon Slayer">
-          <p>demon slayer</p>
+          <img src="./slayer.jpeg" alt="Demon Slayer">
+          <a href="http://127.0.0.1:5500/demon%20slayer.html"> Demon Slayer</a>
         </div>
 
         <div class="service-box">
-          <img src="./aot.jpeg" alt="Attack on Titan">
-          <P>attack on titan</P>
+          <img src="./titan.jpeg" alt="Attack on Titan">
+          <a href="http://127.0.0.1:5500/aot.html">Attack on Titan</a>
         </div>
 
         <div class="service-box">
-          <img src="./one piece.jpeg" alt="One Piece">
-          <p>one piece </p>
-        </div>
-<div class="service-box">
-          <img src="./undefined (1).jpeg" alt="Demon Slayer">
-          <p> demon slayer</p>
+          <img src="./one.jpeg" alt="One Piece">
+          <p>One Piece</p>
         </div>
 
         <div class="service-box">
-          <img src="./aot.jpeg" alt="Attack on Titan">
-            <P>ATTACK ON TITAN</P>
+          <img src="./hunter.jpeg" alt="Demon Slayer">
+          <p>hunter x hunter</p>
         </div>
 
         <div class="service-box">
-          <img src="./one piece.jpeg" alt="One Piece">
-          <p>ONE PIECE</p>
-        </div>
-        <div class="service-box">
-          <img src="./one punchman.jpeg" alt="One Punch Man">
-          <p> ONE PUNCH MAN </p>
+          <img src="./deathnote.jpeg" alt="Attack on Titan">
+          <p>death note</p>
         </div>
 
         <div class="service-box">
-          <img src="./solo leveling.jpeg" alt="Solo Leveling">
-          <p>SOLO LEVELING</p>
+          <img src="./Berikutnya, Solo Leveling S2 yang memiliki judul….jpeg" alt="One Piece">
+          <p>solo leveling</p>
+        </div>
+
+        <div class="service-box">
+          <img src="./WhatsApp Image 2025-11-03 at 01.35.35 (1).jpeg" alt="One Punch Man">
+          <p>death note</p>
+        </div>
+
+        <div class="service-box">
+          <img src="./Naruto: Shippuden.jpeg" alt="Solo Leveling">
+          <p>Naruto: Shippuden</p>
         </div>
 
         <div class="service-box">
           <img src="./jujtsu.jpeg" alt="Jujutsu Kaisen">
           <p>Jujutsu Kaisen</p>
-
+        </div>
       </div>
 
+      <section id="service">
+        <p>Some Hidden Gems</p>
 
-      </div>
-          <section id="service">
-      <p>some hidden gems</p>
+        <div class="services-container">
+          <div class="service-box">
+            <img src="./hero.jpeg" alt="Demon Slayer">
+            <p>hero academia</p>
+          </div>
 
-      <div class="services-container">
-        <div class="service-box">
-          <img src="./undefined (1).jpeg" alt="Demon Slayer">
-          <p>demon slayer</p>
+          <div class="service-box">
+            <img src="./86.jpeg" alt="86">
+            <p>86</p>
+          </div>
+
+          <div class="service-box">
+            <img src="./WhatsApp Image 2025-11-03 at 01.35.35 (1).jpeg" alt="One Piece">
+            <p>One Piece</p>
+          </div>
+
+          <div class="service-box">
+            <img src="./undefined (1).jpeg" alt="Demon Slayer">
+            <p>Demon Slayer</p>
+          </div>
+
+          <div class="service-box">
+            <img src="./aot.jpeg" alt="Attack on Titan">
+            <p>Attack on Titan</p>
+          </div>
+
+          <div class="service-box">
+            <img src="./one piece.jpeg" alt="One Piece">
+            <p>assasination classroom</p>
+          </div>
         </div>
-
-        <div class="service-box">
-          <img src="./aot.jpeg" alt="Attack on Titan">
-          <P>attack on titan</P>
-        </div>
-
-        <div class="service-box">
-          <img src="./one piece.jpeg" alt="One Piece">
-          <p>one piece </p>
-        </div>
-<div class="service-box">
-          <img src="./undefined (1).jpeg" alt="Demon Slayer">
-          <p> demon slayer</p>
-        </div>
-
-        <div class="service-box">
-          <img src="./aot.jpeg" alt="Attack on Titan">
-            <P>ATTACK ON TITAN</P>
-        </div>
-
-        <div class="service-box">
-          <img src="./one piece.jpeg" alt="One Piece">
-          <p>ONE PIECE</p>
-        </div>
-
-      </div>
-
-
-      </div>
-
-      
-
-    </section>
-
-      
-
+      </section>
     </section>
   </main>
 </body>
