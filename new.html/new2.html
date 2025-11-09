@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        div#box{
+            background-color: blue;
+            display: grid;
+            grid-template-columns: repeat(3,100px);
+            border: 2px solid black;
+            justify-content: center;
+        }
+        div#box>div{
+            border: 2px solid red;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: yellow;
+        }
+        div#box>div:nth-last-of-type(1){
+            background-color: rgb(70, 181, 22);
+            grid-area: 1/2/2/3;
+        }
+        div#box>div:nth-last-of-type(3){
+            background-color: rgb(16, 131, 135);
+            grid-area: 3/1/4/3;
+        }
+    </style>
+</head>
+<body>
+    <div id="box">
+        <div>1</div>
+        <div>2</div>
+        <div>3</div>
+        <div>4</div>
+        <div>5</div>
+        <div>6</div>
+        <div>7</div>
+        <div>8</div>
+        <div>9</div>
+    </div>
+</body>
+</html>

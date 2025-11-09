@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <form class="form" action="">
+        <div>
+            <label for = "text"> enter your text</label>
+            <input id="text" type="text" id="name" name="name" placeholder="username" required> 
+        </div>
+        <br>
+        <div>
+            <label for = "age"> enter your age</label>
+            <input id="age" type="number" name="age" placeholder="your age">
+        </div> 
+        <br> 
+        <div>
+            <label for="">your faviroute color:</label>
+            <input type="color" name="color" id="">
+        </div>
+        <br> 
+        <div>
+            <label for="">your faviroute email:</label>
+            <input type="email" name="email" id="" required>
+        </div>
+        <br> 
+        <div>
+            <label for="">your password:</label>
+            <input minlength="6"  type="password" name="password" id="" required>
+        </div>
+        <br>
+        <fieldset>
+  <legend>Select a maintenance drone:</legend>
+
+  <div>
+    <input type="radio" id="huey" name="drone" value="huey" checked />
+    <label for="huey">Huey</label>
+  </div>
+
+  <div>
+    <input type="radio" id="dewey" name="drone" value="dewey" />
+    <label for="dewey">Dewey</label>
+  </div>
+
+  <div>
+    <input type="radio" id="louie" name="drone" value="louie" />
+    <label for="louie">Louie</label>
+  </div>
+</fieldset>
+        <input type="submit" value="Send Request" />  
+    </form>
+    <label for="doc-select">Choose a doc:</label>
+
+<select name="doc" id="Document">
+  <option value="">--Please choose an option--</option>
+  <option value="doc1">doc1</option>
+  <option value="cat">Cat</option>
+  <option value="hamster">Hamster</option>
+  <option value="parrot">Parrot</option>
+  <option value="spider">Spider</option>
+  <option value="goldfish">Goldfish</option>
+</select>
+</body>
+</html>

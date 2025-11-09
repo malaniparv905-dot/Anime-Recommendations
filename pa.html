@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HiAnime Clone</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        /* --- Global Styles & Variables --- */
+:root {
+    --primary-color: #a450f3; /* HiAnime's purple accent */
+    --background-color: #121212; /* Dark background */
+    --surface-color: #1e1e1e; /* Slightly lighter background for cards/nav */
+    --text-color: #ffffff;
+    --text-secondary-color: #aaaaaa;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+}
+
+/* --- Header & Navigation --- */
+header {
+    background-color: var(--surface-color);
+    padding: 1rem 5%;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    border-bottom: 1px solid #282828;
+}
+
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.nav-left, .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.logo {
+    height: 35px;
+}
+
+nav a {
+    color: var(--text-secondary-color);
+    text-decoration: none;
+    font-weight: bold;
+    transition: color 0.3s;
+}
+
+nav a:hover {
+    color: var(--primary-color);
+}
+
+.search-box {
+    position: relative;
+}
+
+.search-box input {
+    background-color: var(--background-color);
+    border: 1px solid #333;
+    border-radius: 20px;
+    padding: 0.5rem 1rem;
+    color: var(--text-color);
+    width: 250px;
+}
+
+.search-box i {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary-color);
+}
+
+.login-btn {
+    background-color: var(--primary-color);
+    color: var(--text-color);
+    border: none;
+    border-radius: 20px;
+    padding: 0.6rem 1.5rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.login-btn:hover {
+    background-color: #8e3ddb;
+}
+
+/* --- Main Content --- */
+main {
+    padding: 2rem 5%;
+}
+
+/* --- Hero Section --- */
+.hero {
+    background-image: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://placehold.co/1200x400/1a1a1a/FFF?text=Featured+Anime+BG');
+    height: 400px;
+    background-size: cover;
+    background-position: center;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2rem;
+}
+
+.hero-content {
+    max-width: 50%;
+}
+
+.hero h1 {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.hero p {
+    font-size: 1.1rem;
+    margin-bottom: 1.5rem;
+    color: var(--text-secondary-color);
+}
+
+.watch-now-btn {
+    background-color: var(--primary-color);
+    color: var(--text-color);
+    border: none;
+    border-radius: 8px;
+    padding: 0.8rem 1.8rem;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.watch-now-btn i {
+    margin-right: 0.5rem;
+}
+
+.watch-now-btn:hover {
+     background-color: #8e3ddb;
+}
+
+
+/* --- Anime Grid Section --- */
+.anime-section {
+    margin-top: 3rem;
+}
+
+.anime-section h2 {
+    font-size: 1.8rem;
+    margin-bottom: 1.5rem;
+    border-left: 4px solid var(--primary-color);
+    padding-left: 0.8rem;
+}
+
+.anime-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1.5rem;
+}
+
+.anime-card {
+    background-color: var(--surface-color);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.3s, box-shadow 0.3s;
+    cursor: pointer;
+}
+
+.anime-card:hover {
+    transform: translateY(-10px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+}
+
+.anime-card img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.anime-title {
+    padding: 1rem;
+    font-weight: bold;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* --- Footer --- */
+footer {
+    text-align: center;
+    padding: 2rem;
+    margin-top: 3rem;
+    background-color: var(--surface-color);
+    color: var(--text-secondary-color);
+    border-top: 1px solid #282828;
+}
+    </style>
+</head>
+<body>
+
+    <header>
+        <nav>
+            <div class="nav-left">
+                <img src="images/logo.png" alt="Logo" class="logo">
+                <a href="#">Home</a>
+                <a href="#">Movies</a>
+                <a href="#">TV Series</a>
+                <a href="#">Most Popular</a>
+            </div>
+            <div class="nav-right">
+                <div class="search-box">
+                    <input type="text" placeholder="Search anime...">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                </div>
+                <button class="login-btn">Login</button>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="hero-content">
+                <h1>Featured Anime Title</h1>
+                <p>This is a short, exciting description of the featured anime series. Watch it now!</p>
+                <button class="watch-now-btn"><i class="fa-solid fa-play"></i> Watch Now</button>
+            </div>
+        </section>
+
+        <section class="anime-section">
+            <h2>Trending Now</h2>
+            <div class="anime-grid">
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+1" alt="Anime 1">
+                    <p class="anime-title">Anime Title 1</p>
+                </div>
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+2" alt="Anime 2">
+                    <p class="anime-title">Anime Title 2</p>
+                </div>
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+3" alt="Anime 3">
+                    <p class="anime-title">Anime Title 3</p>
+                </div>
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+4" alt="Anime 4">
+                    <p class="anime-title">Anime Title 4</p>
+                </div>
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+5" alt="Anime 5">
+                    <p class="anime-title">Anime Title 5</p>
+                </div>
+                <div class="anime-card">
+                    <img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+6" alt="Anime 6">
+                    <p class="anime-title">Anime Title 6</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="anime-section">
+            <h2>Latest Episodes</h2>
+            <div class="anime-grid">
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+7" alt="Anime 7"><p class="anime-title">Anime Title 7</p></div>
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+8" alt="Anime 8"><p class="anime-title">Anime Title 8</p></div>
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+9" alt="Anime 9"><p class="anime-title">Anime Title 9</p></div>
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+10" alt="Anime 10"><p class="anime-title">Anime Title 10</p></div>
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+11" alt="Anime 11"><p class="anime-title">Anime Title 11</p></div>
+                 <div class="anime-card"><img src="https://placehold.co/200x300/1a1a1a/FFF?text=Anime+12" alt="Anime 12"><p class="anime-title">Anime Title 12</p></div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2025 HiAnime Clone. All Rights Reserved.</p>
+        <p>This is a non-functional clone made for educational purposes.</p>
+    </footer>
+
+</body>
+</html>

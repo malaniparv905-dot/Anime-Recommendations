@@ -1,0 +1,1436 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+
+// --- Utility Functions ---
+
+// Base64 to ArrayBuffer for Firebase config
+const base64ToJson = (base64) => {
+  try {
+    if (!base64 || typeof window === 'undefined') return {}; // Server-side guard
+    
+    // Safely handle potentially malformed or unpadded base64 strings
+    let padded = base64.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = padded.length % 4;
+    if (padding) {
+        padded = padded.padEnd(padded.length + 4 - padding, '=');
+    }
+
+    const jsonString = atob(padded);
+    return JSON.parse(jsonString);
+  } catch (error) {
+    console.error("Error parsing Firebase config:", error);
+    return {};
+  }
+};
+
+// Exponential backoff for retrying Firestore operations (simplified for this example)
+const retryFetch = async (fn, maxRetries = 3, delay = 1000) => {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            console.warn(`Attempt ${i + 1} failed. Retrying in ${delay * Math.pow(2, i)}ms.`, error);
+            if (i === maxRetries - 1) throw error;
+            await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+        }
+    }
+};
+
+// Function to get a date 30 days from now in 'YYYY-MM-DD' format
+const getDefaultDeadline = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().split('T')[0];
+};
+
+// --- Firebase Initialization and Hook ---
+
+// Global variables provided by the Canvas environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-study-planner';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? base64ToJson(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// The main application hook for state and data fetching
+const useAppState = () => {
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+
+    // Data state
+    const [syllabus, setSyllabus] = useState([]);
+    // UPDATED: Added currentView to default profile
+    const [profile, setProfile] = useState({ dailyHours: 2, deadlineDate: getDefaultDeadline(), currentXP: 0, currentView: 'home' }); 
+    const [performanceData, setPerformanceData] = useState([]); // { subjectId, topicId, score, confidence, date, xpEarned: 50+score/2 }
+    const [completedSessions, setCompletedSessions] = useState([]); // Array of session IDs (date-subjectId-topicId)
+    const [isLoading, setIsLoading] = useState(true);
+
+    // 1. Initialize Firebase and Auth
+    useEffect(() => {
+        if (!firebaseConfig.apiKey) {
+            console.error("Firebase config is missing. Data persistence disabled.");
+            setIsAuthReady(true);
+            setIsLoading(false);
+            return;
+        }
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestore = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            setDb(firestore);
+            setAuth(firebaseAuth);
+
+            // Authentication logic
+            const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+                if (user) {
+                    setUserId(user.uid);
+                    setIsAuthReady(true);
+                    console.log("Authenticated user:", user.uid);
+                } else {
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(firebaseAuth);
+                        }
+                    } catch (error) {
+                        console.error("Authentication failed:", error);
+                        // Fallback to anonymous or just set isAuthReady
+                        setUserId(firebaseAuth.currentUser?.uid || 'anonymous');
+                        setIsAuthReady(true);
+                    }
+                }
+            });
+
+            return () => unsubscribe();
+        } catch (e) {
+            console.error("Failed to initialize Firebase:", e);
+            setIsAuthReady(true);
+            setIsLoading(false);
+        }
+    }, []);
+
+    // 2. Data Listener (onSnapshot)
+    useEffect(() => {
+        if (!db || !isAuthReady || !userId) return;
+
+        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'studyPlanner', 'data');
+
+        const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setSyllabus(data.syllabus || []);
+                setPerformanceData(data.performanceData || []);
+                setCompletedSessions(data.completedSessions || []); // Load completed sessions
+                
+                // Ensure profile data integrity and include XP/View fallback
+                const profileData = data.profile || { dailyHours: 2, deadlineDate: getDefaultDeadline(), currentXP: 0, currentView: 'home' };
+                if (profileData.subject) delete profileData.subject; 
+                if (profileData.totalDays) delete profileData.totalDays; 
+                if (!profileData.deadlineDate) profileData.deadlineDate = getDefaultDeadline();
+                if (typeof profileData.currentXP === 'undefined') profileData.currentXP = 0; 
+                // NEW CHECK: Load currentView or set default
+                if (typeof profileData.currentView === 'undefined') profileData.currentView = 'home'; 
+
+                setProfile(profileData);
+            } else {
+                console.log("No existing data for user. Using defaults.");
+            }
+            setIsLoading(false);
+        }, (error) => {
+            console.error("Error getting data snapshot:", error);
+            setIsLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [db, userId, isAuthReady]);
+
+    // 3. Data Saver
+    const saveData = useCallback(async (updates) => {
+        if (!db || !userId) {
+            console.error("Cannot save data: DB not initialized or user not authenticated.");
+            return;
+        }
+
+        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'studyPlanner', 'data');
+        // Include completedSessions in the saved data payload
+        const currentData = { syllabus, profile, performanceData, completedSessions, ...updates };
+
+        try {
+            await retryFetch(() => setDoc(userDocRef, currentData, { merge: true }));
+            console.log("Data saved successfully.");
+        } catch (error) {
+            console.error("Error saving data:", error);
+        }
+    }, [db, userId, syllabus, profile, performanceData, completedSessions]);
+
+    // Expose the necessary state and functions
+    return {
+        isLoading,
+        userId,
+        syllabus,
+        profile,
+        performanceData,
+        completedSessions, 
+        saveData,
+        setSyllabus,
+        setProfile,
+        setPerformanceData,
+        setCompletedSessions
+    };
+};
+
+// --- Adaptation Logic (The core brain) ---
+
+/**
+ * Generates an adaptive study plan based on current state.
+ */
+const generatePlan = (syllabus, profile, performanceData) => {
+    if (syllabus.length === 0 || !profile.deadlineDate) return [];
+
+    // Calculate days to plan based on the deadline
+    const deadline = new Date(profile.deadlineDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); 
+    deadline.setHours(0, 0, 0, 0); 
+
+    const diffTime = deadline.getTime() - today.getTime();
+    let daysToPlan = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (daysToPlan <= 0) {
+        daysToPlan = 1;
+    }
+
+    const maxSessionsPerDay = profile.dailyHours || 2;
+    const sessions = [];
+    const allTopics = [];
+
+    // 1. Flatten all topics and calculate their priority
+    syllabus.forEach(subject => {
+        subject.topics.forEach(topic => {
+            const history = performanceData
+                .filter(p => p.subjectId === subject.id && p.topicId === topic.id)
+                .sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort latest first
+
+            const lastResult = history.length > 0 ? history[0] : null;
+            let priority = 5; // Base priority
+
+            if (!lastResult) {
+                priority = 7; // New or never-tested
+            } else {
+                const score = lastResult.score;
+                const confidence = lastResult.confidence;
+
+                // Performance Impact
+                if (score < 50) priority += 5;
+                else if (score < 75) priority += 3;
+                else if (score < 90) priority += 1;
+                else if (score >= 95) priority -= 2;
+
+                // Confidence Mismatch (The Adaptation)
+                if (score < 75 && confidence >= 8) {
+                    priority += 7; // Urgent re-test due to overconfidence
+                } else if (score >= 90 && confidence < 5) {
+                    priority += 1; // Needs gentle reinforcement despite high score (low confidence)
+                }
+
+                // Time decay
+                const daysSinceLast = Math.ceil((new Date() - new Date(lastResult.date)) / (1000 * 60 * 60 * 24));
+                if (daysSinceLast > 7) priority += Math.min(3, Math.floor(daysSinceLast / 7)); 
+            }
+
+            priority = Math.min(15, Math.max(1, priority));
+            const neededSessions = Math.round(priority / 3);
+
+            allTopics.push({ 
+                ...topic, 
+                subjectId: subject.id,
+                subjectName: subject.name,
+                priority, 
+                neededSessions 
+            });
+        });
+    });
+
+    const topicsWithPriority = allTopics.sort((a, b) => b.priority - a.priority);
+
+    // 2. Schedule sessions day by day
+    const topicSessionMap = new Map(); // Tracks sessions assigned per topic (subjectId-topicId key)
+
+    for (let i = 0; i < daysToPlan; i++) {
+        const currentDate = new Date(today.getTime());
+        currentDate.setDate(currentDate.getDate() + i);
+        const dayString = currentDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+        let sessionsToday = 0;
+        let scheduledTopics = [];
+
+        for (const topic of topicsWithPriority) {
+            if (sessionsToday >= maxSessionsPerDay) break;
+
+            const key = `${topic.subjectId}-${topic.id}`;
+            const sessionsAssigned = topicSessionMap.get(key) || 0;
+
+            if (sessionsAssigned < topic.neededSessions) {
+                const sessionType = topic.priority >= 10 ? 'Intense Study' : (topic.priority >= 7 ? 'Focused Review' : 'Passive Review');
+                
+                // Create a unique ID for this specific session instance
+                const sessionId = `${currentDate.toISOString().split('T')[0]}-${topic.subjectId}-${topic.id}`;
+
+                scheduledTopics.push({
+                    day: dayString,
+                    date: currentDate.toISOString().split('T')[0],
+                    sessionId: sessionId, // Unique ID for tracking completion
+                    subjectId: topic.subjectId,
+                    subjectName: topic.subjectName,
+                    topicId: topic.id,
+                    topicName: topic.name,
+                    type: sessionType,
+                    priority: topic.priority
+                });
+
+                sessionsToday++;
+                topicSessionMap.set(key, sessionsAssigned + 1);
+            }
+        }
+        sessions.push(...scheduledTopics);
+
+        // Stop planning if a day is empty and we've already scheduled
+        if (scheduledTopics.length === 0 && i > 0) break; 
+    }
+
+    return sessions;
+};
+
+// --- Custom Components ---
+
+// Component for showing XP gain notification
+const XPGainMessage = ({ message }) => {
+    if (!message) return null;
+
+    return (
+        <div className="absolute top-full right-0 mt-2 p-3 bg-amber-500 text-black text-sm font-bold rounded-lg shadow-2xl animate-bounce z-50">
+            {message}
+        </div>
+    );
+};
+
+const Header = ({ title, userId, currentXP }) => {
+    const [xpMessage, setXpMessage] = useState('');
+
+    useEffect(() => {
+        // Simple watcher to trigger XP animation if currentXP increases significantly
+        const lastXp = localStorage.getItem('lastXP') || 0;
+        const diff = currentXP - parseInt(lastXp);
+        
+        if (diff > 0) {
+            setXpMessage(`+${diff} XP!`);
+            localStorage.setItem('lastXP', currentXP.toString());
+            setTimeout(() => setXpMessage(''), 3000);
+        } else if (currentXP >= 0) {
+             localStorage.setItem('lastXP', currentXP.toString());
+        }
+    }, [currentXP]);
+
+    return (
+        <div className="bg-gray-900/95 backdrop-blur sticky top-0 z-10 shadow-lg p-4 flex justify-between items-center border-b border-gray-800">
+            <h1 className="text-3xl font-extrabold text-cyan-400 tracking-tight">{title}</h1>
+            <div className="flex items-center space-x-4 relative">
+                {/* XP Display */}
+                <div className="flex items-center text-lg font-bold text-amber-400 bg-gray-800 px-3 py-1 rounded-full shadow-inner border border-amber-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 10a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1z" clipRule="evenodd" />
+                        <path d="M10 3a7 7 0 100 14A7 7 0 0010 3zM4.328 6.572a1 1 0 011.696-1.144A7.001 7.001 0 003 10a1 1 0 11-2 0 9 9 0 1118 0 1 1 0 11-2 0A7.001 7.001 0 0014.152 5.428a1 1 0 011.696 1.144A9.001 9.001 0 0110 17a9 9 0 01-5.672-10.428z" clipRule="evenodd" />
+                    </svg>
+                    {currentXP} XP
+                </div>
+                <XPGainMessage message={xpMessage} />
+                {/* Existing User ID Display */}
+                {userId && (
+                    <div className="text-xs text-gray-400 hidden sm:block">
+                        User ID: <span className="font-mono bg-gray-700 p-1 rounded text-cyan-400 text-[10px]">{userId}</span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const Card = ({ children, className = '' }) => (
+    <div className={`bg-gray-800 shadow-2xl rounded-2xl p-6 transition-all duration-300 ${className}`}>
+        {children}
+    </div>
+);
+
+const Button = ({ children, onClick, disabled = false, className = '', small = false, type = 'button' }) => (
+    <button
+        type={type}
+        onClick={onClick}
+        disabled={disabled}
+        className={`w-full sm:w-auto font-semibold text-gray-900 rounded-xl transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] focus:outline-none focus:ring-4 focus:ring-cyan-600
+            ${disabled ? 'bg-gray-500 cursor-not-allowed text-gray-300' : 'bg-cyan-400 hover:bg-cyan-300 shadow-lg shadow-cyan-900/50'} 
+            ${small ? 'px-3 py-1 text-sm' : 'px-6 py-3'} 
+            ${className}`}
+    >
+        {children}
+    </button>
+);
+
+const Input = ({ label, type = 'text', value, onChange, placeholder = '', ...rest }) => (
+    <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
+        <input
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            className="w-full p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-150"
+            {...rest}
+        />
+    </div>
+);
+
+const Select = ({ label, value, onChange, options }) => (
+    <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
+        <select
+            value={value}
+            onChange={onChange}
+            className="w-full p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-cyan-500 focus:border-cyan-500 transition duration-150"
+        >
+            {options.map((opt) => (
+                <option key={opt.value} value={opt.value} className='bg-gray-700'>{opt.label}</option>
+            ))}
+        </select>
+    </div>
+);
+
+// --- New Plan Summary Component for HomePage ---
+
+const PlanSummary = ({ plan, completedSessions, setView }) => {
+    const upcomingSessions = plan.filter(session => !completedSessions.includes(session.sessionId))
+                               .slice(0, 5); // Show next 5 tasks
+
+    if (upcomingSessions.length === 0) {
+        return (
+            <div className="mt-8 text-center p-4 bg-gray-700 rounded-xl border border-gray-600">
+                <p className="font-semibold text-gray-300 mb-2">No upcoming study sessions!</p>
+                <p className="text-sm text-gray-400">Great job! Check your deadline or relax.</p>
+            </div>
+        );
+    }
+    
+    // Get today's date for grouping
+    const today = new Date().toISOString().split('T')[0];
+
+    return (
+        <div className="mt-8">
+            <h3 className="text-xl font-bold text-cyan-400 mb-4 border-b border-gray-700 pb-2 flex justify-between items-center">
+                Upcoming Tasks
+                <Button small onClick={() => setView('planner')} className="!px-3 !py-1 !text-xs !bg-gray-600 hover:!bg-gray-500 !text-white !shadow-none">
+                    Go to Full Plan
+                </Button>
+            </h3>
+            <div className="space-y-3">
+                {upcomingSessions.map((session, index) => (
+                    <div 
+                        key={index} 
+                        className="flex items-center justify-between p-3 bg-gray-700 rounded-lg border border-gray-600"
+                    >
+                        <div className="flex-grow min-w-0 mr-4">
+                             <p className="text-sm font-semibold text-gray-200 truncate">
+                                <span className="text-cyan-400 font-bold mr-1">[{session.subjectName}]</span>
+                                {session.topicName}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                                <span className={`font-medium ${session.type === 'Intense Study' ? 'text-red-400' : ''}`}>
+                                    {session.type}
+                                </span>
+                                <span className="ml-2 font-mono">
+                                    {session.date === today ? ' (Today)' : ` (${session.day})`}
+                                </span>
+                            </p>
+                        </div>
+                        <span className="text-xs font-bold text-amber-400 bg-gray-800 px-2 py-1 rounded-full">
+                            100 XP
+                        </span>
+                    </div>
+                ))}
+            </div>
+            {plan.length > 5 && (
+                <p className="text-center text-sm text-gray-500 mt-4">
+                    ... {plan.length - 5} more sessions scheduled.
+                </p>
+            )}
+        </div>
+    );
+}
+
+// --- HomePage Component with Daily Quote and Plan Summary ---
+
+const HomePage = ({ setView, syllabusLength, plan, completedSessions }) => {
+    const quotes = useMemo(() => [
+        "The best way to predict the future is to create it.",
+        "The mind is not a vessel to be filled, but a fire to be kindled.",
+        "Success is the sum of small efforts, repeated day in and day out.",
+        "The difference between ordinary and extraordinary is that little extra.",
+        "Don't wait for opportunity. Create it.",
+        "Believe you can and you're halfway there.",
+        "Strive for progress, not perfection.",
+        "The journey of a thousand miles begins with a single step.",
+        "Today's actions are tomorrow's results.",
+        "You don't have to be great to start, but you have to start to be great."
+    ], []);
+
+    const dailyQuote = useMemo(() => {
+        const todayKey = new Date().toISOString().split('T')[0];
+        const localStorageKey = 'dailyQuoteData';
+        
+        try {
+            const storedQuoteData = localStorage.getItem(localStorageKey);
+            if (storedQuoteData) {
+                const { date, quote } = JSON.parse(storedQuoteData);
+                if (date === todayKey) {
+                    return quote;
+                }
+            }
+            
+            // Generate a new quote using a simple seed based on the date
+            let seed = 0;
+            for (let i = 0; i < todayKey.length; i++) {
+                seed = (seed + todayKey.charCodeAt(i) * i) % quotes.length;
+            }
+            
+            const newQuote = quotes[seed];
+            
+            // Store the new quote for today
+            localStorage.setItem(localStorageKey, JSON.stringify({ date: todayKey, quote: newQuote }));
+            return newQuote;
+        } catch (e) {
+            console.error("Local storage error:", e);
+            return quotes[Math.floor(Math.random() * quotes.length)]; // Fallback
+        }
+    }, [quotes]);
+    
+    const hasSyllabus = syllabusLength > 0;
+
+    return (
+        <Card className="max-w-4xl mx-auto my-8 text-center p-10 bg-gray-900 border-4 border-cyan-600 shadow-cyan-900/70">
+            <h2 className="text-4xl font-extrabold text-cyan-400 mb-6">
+                📚 EXAM PREP: Adaptive Study Hub
+            </h2>
+            <div className="bg-gray-700 p-6 rounded-xl shadow-lg mb-8 border border-gray-600">
+                <p className="text-lg italic text-gray-200 mb-3">
+                    &ldquo;{dailyQuote}&rdquo;
+                </p>
+                <p className="text-sm font-semibold text-cyan-500">- Your Adaptive Planner</p>
+            </div>
+            
+            <div className="space-y-4">
+                <p className="text-gray-300 text-lg">
+                    {hasSyllabus 
+                        ? "Your study environment is ready! Check your personalized plan or view your progress."
+                        : "Ready to conquer your exams? Start by setting up your subjects and study schedule."
+                    }
+                </p>
+                
+                {hasSyllabus && (
+                    <PlanSummary 
+                        plan={plan} 
+                        completedSessions={completedSessions} 
+                        setView={setView} 
+                    />
+                )}
+                
+                <div className="flex flex-col sm:flex-row justify-center gap-4 mt-6">
+                    <Button onClick={() => setView('setup')} className="!w-full sm:!w-1/3 !bg-gray-600 hover:!bg-gray-500 !text-white">
+                        {hasSyllabus ? 'Edit Subjects' : '1. Start Setup'}
+                    </Button>
+                    <Button 
+                        onClick={() => setView('planner')} 
+                        disabled={!hasSyllabus} 
+                        className={`!w-full sm:!w-1/3 ${!hasSyllabus ? '' : '!bg-cyan-400 hover:!bg-cyan-300 shadow-cyan-900/50'}`}
+                    >
+                        2. View Plan
+                    </Button>
+                </div>
+            </div>
+        </Card>
+    );
+};
+
+// --- View Components ---
+
+const SyllabusSetup = ({ syllabus, profile, saveData, setSyllabus, setProfile, setView }) => {
+    const [newSubjectName, setNewSubjectName] = useState('');
+    const [newTopicName, setNewTopicName] = useState('');
+    const [selectedSubjectId, setSelectedSubjectId] = useState('');
+
+    // --- Subject Handlers ---
+    const handleAddSubject = () => {
+        if (newSubjectName.trim()) {
+            const updatedSyllabus = [
+                ...syllabus,
+                { id: crypto.randomUUID(), name: newSubjectName.trim(), topics: [] }
+            ];
+            setSyllabus(updatedSyllabus);
+            setNewSubjectName('');
+            saveData({ syllabus: updatedSyllabus });
+        }
+    };
+
+    const handleDeleteSubject = (id) => {
+        const updatedSyllabus = syllabus.filter(subject => subject.id !== id);
+        setSyllabus(updatedSyllabus);
+        saveData({ syllabus: updatedSyllabus });
+        if (selectedSubjectId === id) setSelectedSubjectId('');
+    };
+
+    // --- Topic Handlers ---
+    const handleAddTopic = () => {
+        if (newTopicName.trim() && selectedSubjectId) {
+            const updatedSyllabus = syllabus.map(subject => {
+                if (subject.id === selectedSubjectId) {
+                    return {
+                        ...subject,
+                        topics: [...subject.topics, { id: crypto.randomUUID(), name: newTopicName.trim() }]
+                    };
+                }
+                return subject;
+            });
+            setSyllabus(updatedSyllabus);
+            setNewTopicName('');
+            saveData({ syllabus: updatedSyllabus });
+        }
+    };
+
+    const handleDeleteTopic = (subjectId, topicId) => {
+        const updatedSyllabus = syllabus.map(subject => {
+            if (subject.id === subjectId) {
+                return {
+                    ...subject,
+                    topics: subject.topics.filter(topic => topic.id !== topicId)
+                };
+            }
+            return subject;
+        });
+        setSyllabus(updatedSyllabus);
+        saveData({ syllabus: updatedSyllabus });
+    };
+
+    const handleProfileChange = (key, value) => {
+        const updatedProfile = { ...profile, [key]: value };
+        setProfile(updatedProfile);
+        saveData({ profile: updatedProfile });
+    };
+
+    const currentSubject = syllabus.find(s => s.id === selectedSubjectId);
+    
+    const subjectOptions = syllabus.map(s => ({ value: s.id, label: s.name }));
+
+    return (
+        <Card className="max-w-4xl mx-auto my-8">
+            <h2 className="text-2xl font-bold text-cyan-400 mb-6 border-b border-gray-700 pb-2">1. Setup Profile & Syllabus</h2>
+
+            <div className="grid sm:grid-cols-3 gap-4 mb-8">
+                <div>
+                    <Input
+                        label="Daily Study Hours"
+                        type="number"
+                        value={profile.dailyHours}
+                        onChange={(e) => handleProfileChange('dailyHours', parseFloat(e.target.value))}
+                    />
+                </div>
+                <div className="sm:col-span-2">
+                    <Input
+                        label="Study Deadline"
+                        type="date"
+                        value={profile.deadlineDate}
+                        onChange={(e) => handleProfileChange('deadlineDate', e.target.value)}
+                    />
+                </div>
+            </div>
+
+            <h3 className="text-xl font-semibold text-gray-300 mb-4">Subjects</h3>
+            <div className="flex space-x-2 mb-4">
+                <input
+                    type="text"
+                    value={newSubjectName}
+                    onChange={(e) => setNewSubjectName(e.target.value)}
+                    placeholder="Enter new subject, e.g., 'Calculus'"
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddSubject()}
+                    className="flex-grow p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-cyan-500 focus:border-cyan-500"
+                />
+                <Button onClick={handleAddSubject} className="!w-auto !px-4">Add Subject</Button>
+            </div>
+            
+            <div className="flex flex-col md:flex-row gap-6">
+                <div className="md:w-1/3">
+                    <h4 className="font-medium text-gray-400 mb-2">Available Subjects ({syllabus.length})</h4>
+                    <ul className="space-y-2 max-h-48 overflow-y-auto pr-2 bg-gray-700 p-2 rounded-lg border border-gray-600">
+                        {syllabus.map(subject => (
+                            <li key={subject.id} className={`flex justify-between items-center p-2 rounded-xl border transition duration-150 cursor-pointer 
+                                ${subject.id === selectedSubjectId ? 'bg-cyan-700 border-cyan-500' : 'bg-gray-800 hover:bg-gray-700 border-gray-700'}`}
+                                onClick={() => setSelectedSubjectId(subject.id)}
+                            >
+                                <span className="text-gray-100 font-medium">{subject.name} ({subject.topics.length})</span>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteSubject(subject.id); }}
+                                    className="text-red-400 hover:text-red-200 p-1"
+                                    title="Delete Subject"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 10-2 0v6a1 1 0 102 0V8z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+                
+                <div className="md:w-2/3 md:border-l md:border-gray-700 md:pl-6 pt-4 md:pt-0">
+                    <h4 className="font-medium text-gray-400 mb-2">Topics for: {currentSubject ? currentSubject.name : 'Select a Subject'}</h4>
+                    {currentSubject ? (
+                        <>
+                            <div className="flex space-x-2 mb-4">
+                                <input
+                                    type="text"
+                                    value={newTopicName}
+                                    onChange={(e) => setNewTopicName(e.target.value)}
+                                    placeholder={`Add topic for ${currentSubject.name}`}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleAddTopic()}
+                                    className="flex-grow p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-cyan-500 focus:border-cyan-500"
+                                />
+                                <Button onClick={handleAddTopic} className="!w-auto !px-4">Add Topic</Button>
+                            </div>
+                            
+                            <ul className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                                {currentSubject.topics.map(topic => (
+                                    <li key={topic.id} className="flex justify-between items-center bg-gray-700 p-3 rounded-xl border border-gray-600">
+                                        <span className="text-gray-100">{topic.name}</span>
+                                        <button
+                                            onClick={() => handleDeleteTopic(currentSubject.id, topic.id)}
+                                            className="text-red-400 hover:text-red-200 transition duration-150 p-1"
+                                            title="Delete Topic"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 10-2 0v6a1 1 0 102 0V8z" clipRule="evenodd" />
+                                            </svg>
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    ) : (
+                        <div className="p-4 bg-gray-700 text-gray-400 rounded-lg text-center border border-gray-600">
+                            Select a subject above to add topics, or add a new subject first.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="mt-8">
+                <Button onClick={() => setView('planner')} disabled={syllabus.every(s => s.topics.length === 0)}>
+                    Generate Plan &rarr;
+                </Button>
+            </div>
+        </Card>
+    );
+};
+
+// ASSESSMENT LOG: This view is hidden from navigation but kept functional as it is the core data input for the adaptive engine.
+const AssessmentLog = ({ syllabus, performanceData, saveData, setPerformanceData, setView, profile, setProfile }) => {
+    const [selectedSubjectId, setSelectedSubjectId] = useState('');
+    const [selectedTopicId, setSelectedTopicId] = useState('');
+    const [score, setScore] = useState(''); // 0-100
+    const [confidence, setConfidence] = useState(5); // 1-10
+    const [message, setMessage] = useState('');
+
+    const subjectOptions = syllabus.map(s => ({ value: s.id, label: s.name }));
+    const currentSubject = syllabus.find(s => s.id === selectedSubjectId);
+    const topicOptions = currentSubject ? currentSubject.topics.map(t => ({ value: t.id, label: t.name })) : [];
+
+    const handleLogPerformance = () => {
+        if (!selectedSubjectId || !selectedTopicId || score === '' || isNaN(score) || score < 0 || score > 100) {
+            setMessage('Please select a subject, topic, and enter a valid score (0-100).');
+            return;
+        }
+
+        const scoreInt = parseInt(score);
+
+        const newLog = {
+            id: crypto.randomUUID(),
+            subjectId: selectedSubjectId,
+            topicId: selectedTopicId,
+            score: scoreInt,
+            confidence: parseInt(confidence),
+            date: new Date().toISOString(),
+        };
+
+        // XP Calculation for Assessment (50 base + 50 max bonus for 100% score)
+        const earnedXP = 50 + Math.floor(scoreInt / 2); 
+        const newTotalXP = (profile.currentXP || 0) + earnedXP;
+
+        const updatedProfile = { ...profile, currentXP: newTotalXP };
+        const updatedPerformance = [...performanceData, newLog];
+
+        // Update local state
+        setPerformanceData(updatedPerformance);
+        setProfile(updatedProfile); 
+        
+        // Save both updated performance and updated profile
+        saveData({ 
+            performanceData: updatedPerformance,
+            profile: updatedProfile
+        });
+
+        // Reset form
+        setScore('');
+        setConfidence(5);
+        setSelectedTopicId('');
+        setMessage(`Assessment logged! You earned ${earnedXP} XP for the result. Total XP: ${newTotalXP}. Planner will now adapt.`);
+        
+        setTimeout(() => setMessage(''), 5000);
+    };
+
+    const isMismatch = parseInt(score) < 75 && parseInt(confidence) >= 8;
+
+    // Reset topic selection if subject changes
+    useEffect(() => {
+        setSelectedTopicId('');
+    }, [selectedSubjectId]);
+
+    return (
+        <Card className="max-w-4xl mx-auto my-8">
+            <h2 className="text-2xl font-bold text-cyan-400 mb-6 border-b border-gray-700 pb-2">Log New Performance & Confidence</h2>
+            
+            <div className="p-2 mb-4 bg-gray-700 text-gray-300 rounded-lg text-sm border border-gray-600">
+                This is the **manual input** required for the adaptive engine to work. Record your test scores here!
+            </div>
+            
+            {syllabus.length === 0 ? (
+                <div className="p-4 mb-4 bg-gray-700 text-yellow-400 rounded-lg border border-yellow-600">
+                    Please go to **Setup** to add subjects and topics first.
+                </div>
+            ) : (
+                <>
+                    <Select
+                        label="Select Subject Tested"
+                        value={selectedSubjectId}
+                        onChange={(e) => setSelectedSubjectId(e.target.value)}
+                        options={[{ value: '', label: '--- Select Subject ---' }, ...subjectOptions]}
+                    />
+
+                    {selectedSubjectId && topicOptions.length > 0 && (
+                        <Select
+                            label="Select Topic Tested"
+                            value={selectedTopicId}
+                            onChange={(e) => setSelectedTopicId(e.target.value)}
+                            options={[{ value: '', label: '--- Select Topic ---' }, ...topicOptions]}
+                        />
+                    )}
+                    
+                    {selectedTopicId && (
+                        <>
+                            <Input
+                                label="Actual Score (%) (0-100)"
+                                type="number"
+                                value={score}
+                                onChange={(e) => setScore(e.target.value)}
+                                placeholder="e.g., 85"
+                                min="0"
+                                max="100"
+                            />
+
+                            <div className="mb-6">
+                                <label className="block text-sm font-medium text-gray-300 mb-1">
+                                    Self-Assessed Confidence (1=Low, 10=High)
+                                </label>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="10"
+                                    step="1"
+                                    value={confidence}
+                                    onChange={(e) => setConfidence(e.target.value)}
+                                    className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer range-lg [&::-webkit-slider-thumb]:bg-cyan-400 [&::-moz-range-thumb]:bg-cyan-400"
+                                />
+                                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                                    <span>1 (Very Low)</span>
+                                    <span>{confidence}</span>
+                                    <span>10 (Very High)</span>
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {isMismatch && (
+                        <div className="p-3 mb-4 bg-red-900 border-l-4 border-red-500 text-red-300 rounded-lg">
+                            ⚠️ **Confidence Mismatch Detected!** Your score is low but confidence is high. The planner will schedule an *immediate, intense review* to prevent overconfidence from becoming a problem.
+                        </div>
+                    )}
+                </>
+            )}
+
+            
+            {message && (
+                <div className="p-3 my-4 bg-teal-900 border-l-4 border-teal-500 text-teal-300 rounded-lg font-semibold">{message}</div>
+            )}
+
+            <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 mt-6">
+                <Button onClick={handleLogPerformance} disabled={!selectedTopicId || score === ''} className="flex-grow !bg-cyan-400 hover:!bg-cyan-300">
+                    Log Assessment & Adapt Plan
+                </Button>
+            </div>
+        </Card>
+    );
+};
+
+const PlannerView = ({ plan, profile, setView, performanceData, completedSessions, saveData, setProfile, setCompletedSessions }) => {
+    const FIXED_XP_FOR_COMPLETION = 100;
+    
+    const groupedPlan = useMemo(() => {
+        return plan.reduce((acc, session) => {
+            (acc[session.date] = acc[session.date] || []).push(session);
+            return acc;
+        }, {});
+    }, [plan]);
+
+    const getLatestScore = useCallback((topicId, subjectId) => {
+        const history = performanceData
+            .filter(p => p.topicId === topicId && p.subjectId === subjectId)
+            .sort((a, b) => new Date(b.date) - new Date(a.date));
+        return history.length > 0 ? history[0] : null;
+    }, [performanceData]);
+
+    const handleCompleteTask = (sessionId) => {
+        if (completedSessions.includes(sessionId)) return;
+
+        // 1. Update XP
+        const newTotalXP = (profile.currentXP || 0) + FIXED_XP_FOR_COMPLETION;
+        const updatedProfile = { ...profile, currentXP: newTotalXP };
+        setProfile(updatedProfile);
+
+        // 2. Mark session as completed
+        const updatedCompletedSessions = [...completedSessions, sessionId];
+        setCompletedSessions(updatedCompletedSessions);
+
+        // 3. Save to Firestore
+        saveData({ 
+            profile: updatedProfile,
+            completedSessions: updatedCompletedSessions
+        });
+    };
+
+    const priorityColors = {
+        'Intense Study': 'bg-red-800/20 text-red-400 border-red-700',
+        'Focused Review': 'bg-yellow-800/20 text-yellow-400 border-yellow-700',
+        'Passive Review': 'bg-teal-800/20 text-teal-400 border-teal-700', // Changed to Teal
+        'Study': 'bg-gray-700/50 text-gray-300 border-gray-600',
+    };
+    
+    // Format deadline date for display
+    const deadlineDisplay = profile.deadlineDate ? 
+        new Date(profile.deadlineDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 
+        'No Deadline Set';
+
+    return (
+        <Card className="max-w-4xl mx-auto my-8">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-2">
+                <h2 className="text-2xl font-bold text-cyan-400">2. Adaptive Study Plan</h2>
+            </div>
+            
+            <p className="text-sm text-gray-400 mb-6">
+                Planning until the **{deadlineDisplay}** deadline, max {profile.dailyHours} sessions/day. 
+                Complete tasks below to earn **{FIXED_XP_FOR_COMPLETION} XP** for effort!
+            </p>
+
+            {Object.keys(groupedPlan).length === 0 ? (
+                <div className="text-center p-10 bg-gray-700 rounded-xl text-gray-400 border border-gray-600">
+                    <p className="font-semibold mb-3">No plan generated.</p>
+                    <p>Please go to the <a href="#" onClick={() => setView('setup')} className="text-cyan-400 hover:underline">Syllabus Setup</a> to add subjects and topics.</p>
+                </div>
+            ) : (
+                <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+                    {Object.keys(groupedPlan).map((dateKey) => (
+                        <div key={dateKey} className="border-l-4 border-cyan-400 pl-4 py-2 bg-gray-700 rounded-lg shadow-md">
+                            <h3 className="text-lg font-bold text-cyan-300 mb-3">{groupedPlan[dateKey][0].day}</h3>
+                            <div className="space-y-3">
+                                {groupedPlan[dateKey].map((session, index) => {
+                                    const latestScore = getLatestScore(session.topicId, session.subjectId);
+                                    const isCompleted = completedSessions.includes(session.sessionId);
+                                    const colorClass = priorityColors[session.type] || 'bg-gray-700 text-gray-300 border-gray-600';
+                                    const mismatchFlag = latestScore && latestScore.score < 75 && latestScore.confidence >= 8;
+
+                                    return (
+                                        <div 
+                                            key={index} 
+                                            className={`flex justify-between items-center p-3 rounded-xl border transition duration-300 
+                                                ${isCompleted ? 'bg-gray-800 text-gray-600 opacity-70 line-through border-gray-700' : colorClass}`}
+                                        >
+                                            <div className="flex-grow min-w-0">
+                                                <p className="font-semibold text-base truncate">
+                                                    <span className={`${isCompleted ? 'text-gray-500' : 'text-cyan-400'} font-bold mr-2`}>[{session.subjectName}]</span>
+                                                    {session.topicName}
+                                                </p>
+                                                <p className={`text-sm ${isCompleted ? 'text-gray-500' : 'text-gray-400'}`}>
+                                                    <span className="font-medium">{session.type}</span>
+                                                    {latestScore && (
+                                                        <span className="ml-3 text-xs opacity-80">
+                                                            (Last Score: {latestScore.score}%, Conf: {latestScore.confidence}/10)
+                                                        </span>
+                                                    )}
+                                                </p>
+                                            </div>
+                                            <div className="flex items-center space-x-2 flex-shrink-0 ml-4">
+                                                {mismatchFlag && !isCompleted && (
+                                                    <span className="text-xs bg-red-600 text-white font-bold px-2 py-1 rounded-full shadow-md">
+                                                        Mismatched!
+                                                    </span>
+                                                )}
+                                                <Button
+                                                    small
+                                                    onClick={() => handleCompleteTask(session.sessionId)}
+                                                    disabled={isCompleted}
+                                                    className={`!w-auto !px-3 !py-1 ${isCompleted ? '!bg-cyan-600 cursor-default !text-white' : '!bg-cyan-400 hover:!bg-cyan-300'}`}
+                                                >
+                                                    {isCompleted ? 'Completed' : `Done (+${FIXED_XP_FOR_COMPLETION} XP)`}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+             <div className="mt-8">
+                <Button onClick={() => setView('setup')} className="!bg-gray-600 hover:!bg-gray-500 !w-auto !text-white">
+                    &larr; Edit Syllabus
+                </Button>
+            </div>
+        </Card>
+    );
+};
+
+// --- New AI Chatbot Component ---
+
+const StudyChatBot = ({ performanceData, setView }) => {
+    const [chatHistory, setChatHistory] = useState([
+        { role: 'model', text: "Hello! I'm your AI Study Tutor. Ask me any general questions about study techniques, motivation, or topics, and I'll do my best to help!" }
+    ]);
+    const [userInput, setUserInput] = useState('');
+    const [isTyping, setIsTyping] = useState(false);
+    const chatEndRef = useRef(null);
+
+    const apiKey = ""; 
+    const MODEL_NAME = 'gemini-2.5-flash-preview-05-20';
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+
+    const SYSTEM_PROMPT = "You are a helpful study tutor named 'AI Study Tutor'. Answer the student's question concisely and encouragingly. If the question is about their personal study data (like scores, topics, or plan completion), gently remind them to check the Planner or Progress views of the application, as you cannot access their real-time personal data. Keep answers focused on study tips or general knowledge.";
+
+    const fetchGeminiResponse = async (query) => {
+        const payload = {
+            contents: [{ parts: [{ text: query }] }],
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        };
+
+        const executeFetch = async () => {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        };
+
+        try {
+            const result = await retryFetch(executeFetch);
+            return result.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't generate a response. Please try rephrasing your question.";
+        } catch (error) {
+            console.error("API Call failed after max retries:", error);
+            return "I'm having trouble connecting right now. Please check your network or try again later!";
+        }
+    };
+
+    const handleSend = async (e) => {
+        e.preventDefault();
+        const userMessage = userInput.trim();
+        if (!userMessage || isTyping) return;
+
+        // 1. Add user message to history
+        const newHistory = [...chatHistory, { role: 'user', text: userMessage }];
+        setChatHistory(newHistory);
+        setUserInput('');
+        setIsTyping(true);
+
+        // 2. Fetch model response
+        const modelResponse = await fetchGeminiResponse(userMessage);
+
+        // 3. Add model response to history
+        setChatHistory(prev => [...prev, { role: 'model', text: modelResponse }]);
+        setIsTyping(false);
+    };
+
+    // Auto-scroll to the latest message
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [chatHistory]);
+
+    const MessageBubble = ({ message }) => (
+        <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+            <div className={`max-w-xs sm:max-w-md p-3 rounded-xl shadow-md ${
+                message.role === 'user' 
+                    ? 'bg-cyan-600 text-white rounded-br-none' 
+                    : 'bg-gray-700 text-gray-200 rounded-tl-none'
+            }`}>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
+            </div>
+        </div>
+    );
+
+    return (
+        <Card className="mt-8">
+            <h3 className="text-xl font-bold text-cyan-400 mb-4 flex items-center border-b border-gray-700 pb-2">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2 text-cyan-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-4a2 2 0 11-4 0 2 2 0 014 0zm-2 5a2 2 0 100 4 2 2 0 000-4z" clipRule="evenodd" />
+                </svg>
+                AI Study Tutor Chat
+            </h3>
+            
+            <div className="h-80 border border-gray-600 rounded-lg p-3 mb-4 overflow-y-auto bg-gray-900">
+                {chatHistory.map((message, index) => (
+                    <MessageBubble key={index} message={message} />
+                ))}
+                {isTyping && (
+                    <div className="flex justify-start mb-4">
+                        <div className="bg-gray-700 p-3 rounded-xl rounded-tl-none text-gray-400 text-sm italic">
+                            AI Study Tutor is thinking...
+                        </div>
+                    </div>
+                )}
+                <div ref={chatEndRef} />
+            </div>
+
+            <form onSubmit={handleSend} className="flex space-x-2">
+                <input
+                    type="text"
+                    value={userInput}
+                    onChange={(e) => setUserInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSend(e); }}
+                    placeholder="Ask a study question..."
+                    className="flex-grow p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-cyan-500 focus:border-cyan-500"
+                    disabled={isTyping}
+                />
+                <Button type="submit" onClick={handleSend} disabled={isTyping || !userInput.trim()} className="!w-auto !px-4 !bg-cyan-400">
+                    {isTyping ? 'Sending...' : 'Send'}
+                </Button>
+            </form>
+        </Card>
+    );
+};
+
+
+const ProgressView = ({ plan, performanceData, setView, completedSessions, profile }) => {
+    // 1. Completion Rate Calculation
+    const totalSessions = plan.length;
+    const completedCount = completedSessions.length;
+    const completionRate = totalSessions > 0 ? Math.round((completedCount / totalSessions) * 100) : 0;
+    
+    // 2. Daily XP Aggregation
+    const dailyXP = useMemo(() => {
+        const lastFiveDays = [];
+        for (let i = 4; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            lastFiveDays.push(d.toISOString().split('T')[0]);
+        }
+
+        const xpByDate = {};
+        
+        // XP from completing tasks
+        plan.forEach(session => {
+            if (completedSessions.includes(session.sessionId)) {
+                xpByDate[session.date] = (xpByDate[session.date] || 0) + 100; // 100 XP per completion
+            }
+        });
+        
+        // XP from performance logs
+        performanceData.forEach(log => {
+            const logDate = log.date.split('T')[0];
+            const earnedXP = 50 + Math.floor(log.score / 2);
+            xpByDate[logDate] = (xpByDate[logDate] || 0) + earnedXP;
+        });
+
+        // Map data to the last 5 days
+        return lastFiveDays.map(dateKey => {
+            const dateDisplay = new Date(dateKey).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+            return {
+                day: dateDisplay,
+                xp: xpByDate[dateKey] || 0
+            };
+        });
+
+    }, [plan, completedSessions, performanceData]);
+
+    // 3. XP Bar Chart Component
+    const XPBarChart = ({ data }) => {
+        const maxXP = Math.max(...data.map(d => d.xp), 1); // Max XP earned in the last 5 days
+        
+        return (
+            <div className="bg-gray-700 p-4 rounded-xl shadow-inner mt-4 border border-gray-600">
+                <h3 className="text-lg font-semibold text-gray-300 mb-4">Daily XP Progress (Last 5 Days)</h3>
+                <div className="flex items-end justify-around h-48 space-x-2">
+                    {data.map((item, index) => (
+                        <div key={index} className="flex flex-col items-center justify-end h-full w-1/5">
+                            <div 
+                                className="w-full rounded-t-lg bg-amber-400 transition-all duration-700 ease-out shadow-md hover:bg-amber-300"
+                                style={{ height: `${(item.xp / maxXP) * 100}%` }}
+                                title={`${item.day}: ${item.xp} XP`}
+                            ></div>
+                            <span className="text-xs font-medium text-gray-400 mt-1">{item.day}</span>
+                            <span className="text-[10px] font-bold text-amber-400 mt-1">{item.xp} XP</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    if (totalSessions === 0) {
+        return (
+            <Card className="max-w-4xl mx-auto my-8 text-center p-10 bg-gray-900 border border-gray-700">
+                <h2 className="text-2xl font-bold text-cyan-400 mb-4">3. Study Progress</h2>
+                <p className="text-gray-400 mb-6">
+                    Start your study journey by visiting **Setup** to define your subjects and topics.
+                </p>
+                <Button onClick={() => setView('setup')}>
+                    Go to Setup &rarr;
+                </Button>
+            </Card>
+        );
+    }
+    
+    return (
+        <div className="max-w-4xl mx-auto my-8">
+            <Card className="mb-8">
+                <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-2">
+                    <h2 className="text-2xl font-bold text-cyan-400">3. Progress Dashboard</h2>
+                </div>
+                
+                {/* Completion Bar */}
+                <div className="mb-8">
+                    <h3 className="text-lg font-semibold text-gray-300 mb-2">Overall Plan Completion</h3>
+                    <div className="relative pt-1">
+                        <div className="flex mb-2 items-center justify-between">
+                            <div>
+                                <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full bg-gray-700 text-cyan-400">
+                                    {completedCount} / {totalSessions} Sessions Complete
+                                </span>
+                            </div>
+                            <div className="text-right">
+                                <span className="text-lg font-bold text-cyan-300">
+                                    {completionRate}%
+                                </span>
+                            </div>
+                        </div>
+                        <div className="overflow-hidden h-4 mb-4 text-xs flex rounded bg-gray-700 shadow-lg">
+                            <div 
+                                style={{ width: `${completionRate}%` }} 
+                                className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-cyan-500 transition-all duration-700"
+                            ></div>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* XP Visualization */}
+                <XPBarChart data={dailyXP} />
+                
+                {/* Score/Confidence Disclaimer */}
+                {performanceData.length > 0 && (
+                    <div className="p-4 mt-6 bg-gray-700 border-l-4 border-yellow-500 text-yellow-400 rounded-lg text-sm border-gray-600">
+                        <p className="font-semibold">Performance Data In Use:</p>
+                        <p className='text-gray-300'>The adaptive planner is currently using **{performanceData.length} recorded assessment scores** (and your confidence ratings) to prioritize topics in your plan. If you want to update this data and keep your plan adaptive, you'll need to **log a new assessment** manually.</p>
+                        <div className='mt-3'>
+                             <Button onClick={() => setView('log')} className="!bg-amber-600 hover:!bg-amber-700 !w-auto !px-4 !py-2 !text-sm !text-white">
+                                Record New Assessment Data
+                            </Button>
+                        </div>
+                    </div>
+                )}
+                
+                <div className="mt-8">
+                    <Button onClick={() => setView('planner')} className="!bg-gray-600 hover:!bg-gray-500 !w-auto !text-white">
+                        &larr; Back to Adaptive Plan
+                    </Button>
+                </div>
+            </Card>
+
+            <StudyChatBot setView={setView} performanceData={performanceData} />
+        </div>
+    );
+};
+
+
+// --- Main Application Component ---
+
+const App = () => {
+    const {
+        isLoading,
+        userId,
+        syllabus,
+        profile,
+        performanceData,
+        completedSessions, 
+        saveData,
+        setSyllabus,
+        setProfile,
+        setPerformanceData,
+        setCompletedSessions 
+    } = useAppState();
+    
+    // UPDATED: Initialize view from persisted profile data
+    const [view, setView] = useState(profile.currentView || 'home'); // 'home', 'setup', 'planner', 'progress', 'log'
+
+    // Generate the plan whenever syllabus, profile, or performance data changes
+    const plan = useMemo(() => {
+        return generatePlan(syllabus, profile, performanceData);
+    }, [syllabus, profile, performanceData]);
+
+    // NEW EFFECT: Persist the current view state to Firestore
+    useEffect(() => {
+        // Only save if the local view state is different from the saved state
+        // This prevents unnecessary writes when the app initially loads
+        if (view !== profile.currentView) {
+            const updatedProfile = { ...profile, currentView: view };
+            setProfile(updatedProfile);
+            saveData({ profile: updatedProfile });
+        }
+    }, [view, profile, saveData, setProfile]);
+
+    if (isLoading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-900">
+                <div className="text-center">
+                    <div className="w-12 h-12 border-4 border-cyan-400 border-t-transparent border-solid rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-lg font-medium text-cyan-400">Loading Planner Data...</p>
+                    <p className="text-sm text-gray-400 mt-1">Connecting to Adaptive Brain...</p>
+                </div>
+            </div>
+        );
+    }
+
+    let CurrentView;
+    if (view === 'home') {
+        CurrentView = <HomePage 
+            setView={setView} 
+            syllabusLength={syllabus.length} 
+            plan={plan} // Passing plan to HomePage
+            completedSessions={completedSessions} // Passing completed sessions for filtering
+        />;
+    } else if (view === 'planner') {
+        CurrentView = <PlannerView 
+            plan={plan} 
+            profile={profile} 
+            setView={setView} 
+            performanceData={performanceData} 
+            completedSessions={completedSessions} 
+            saveData={saveData} 
+            setProfile={setProfile} 
+            setCompletedSessions={setCompletedSessions} 
+            syllabus={syllabus} 
+        />;
+    } else if (view === 'progress') {
+        CurrentView = <ProgressView 
+            performanceData={performanceData} 
+            syllabus={syllabus}
+            setView={setView} 
+            plan={plan}
+            completedSessions={completedSessions}
+            profile={profile}
+        />;
+    } else if (view === 'log') { // This is the Assessment Log
+        CurrentView = <AssessmentLog 
+            syllabus={syllabus} 
+            performanceData={performanceData} 
+            saveData={saveData} 
+            setPerformanceData={setPerformanceData} 
+            setView={setView} 
+            profile={profile} 
+            setProfile={setProfile} 
+        />;
+    } else {
+        CurrentView = <SyllabusSetup syllabus={syllabus} profile={profile} saveData={saveData} setSyllabus={setSyllabus} setProfile={setProfile} setView={setView} />;
+    }
+    
+    const hasSyllabus = syllabus.length > 0;
+    
+    // Navigation items - 'log' removed from here
+    const navItems = [
+        { key: 'home', label: 'Home' },
+        { key: 'setup', label: '1. Setup' },
+        { key: 'planner', label: '2. Planner', disabled: !hasSyllabus },
+        { key: 'progress', label: '3. Progress', disabled: !hasSyllabus },
+    ];
+
+    return (
+        <div className="min-h-screen bg-gray-900 font-sans">
+            <style jsx global>{`
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+                body { font-family: 'Inter', sans-serif; }
+                /* Custom scrollbar for better look */
+                ::-webkit-scrollbar { width: 8px; }
+                ::-webkit-scrollbar-track { background: #1f2937; border-radius: 10px; } /* gray-800 */
+                ::-webkit-scrollbar-thumb { background: #06b6d4; border-radius: 10px; } /* cyan-500 */
+                ::-webkit-scrollbar-thumb:hover { background: #0891b2; } /* cyan-600 */
+
+                /* Range slider color fix for dark mode (web kit) */
+                input[type='range']::-webkit-slider-thumb {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    width: 16px; 
+                    height: 16px; 
+                    background: #22d3ee; /* cyan-400 */
+                    cursor: pointer;
+                    border-radius: 50%;
+                    box-shadow: 0 0 2px rgba(0,0,0,0.5);
+                    margin-top: -6px; /* Center the thumb vertically */
+                }
+                /* Range slider color fix for dark mode (moz) */
+                input[type='range']::-moz-range-thumb {
+                    width: 16px; 
+                    height: 16px; 
+                    background: #22d3ee; /* cyan-400 */
+                    cursor: pointer;
+                    border-radius: 50%;
+                    box-shadow: 0 0 2px rgba(0,0,0,0.5);
+                    border: none;
+                }
+            `}</style>
+            {/* Pass currentXP to Header */}
+            <Header title="Adaptive Study Planner" userId={userId} currentXP={profile.currentXP} />
+            <div className="p-4 sm:p-6 lg:p-8">
+                <div className="flex justify-center space-x-2 mb-6">
+                    {navItems.map(item => (
+                        <Button 
+                            key={item.key}
+                            onClick={() => setView(item.key)} 
+                            disabled={item.disabled}
+                            className={`!w-auto !py-2 !px-4 !text-sm ${view !== item.key ? '!bg-gray-700 !text-gray-300 hover:!bg-gray-600 !shadow-none' : ''}`}
+                        >
+                            {item.label}
+                        </Button>
+                    ))}
+                </div>
+                {CurrentView}
+            </div>
+        </div>
+    );
+};
