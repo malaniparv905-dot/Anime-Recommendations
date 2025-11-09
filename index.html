@@ -113,6 +113,97 @@
     div>.service-box>a:hover{
       color: #00e5ff;
     }
+
+    /* Responsive Design */
+    @media (max-width: 1024px) {
+      .service-box {
+        width: 48%;
+      }
+      
+      #service > p {
+        font-size: 42px;
+        padding-left: 40px;
+        padding-right: 40px;
+      }
+      
+      .services-container,
+      .services-container1 {
+        margin: 40px;
+        gap: 15px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .service-box {
+        width: 100%;
+        flex-direction: column;
+        text-align: center;
+        padding: 15px;
+      }
+      
+      .service-box img {
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 10px;
+      }
+      
+      .service-box p,
+      .service-box a {
+        padding: 0;
+        font-size: 16px;
+      }
+      
+      #service > p {
+        font-size: 32px;
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 30px;
+        letter-spacing: 1px;
+      }
+      
+      .services-container,
+      .services-container1 {
+        margin: 20px;
+        gap: 15px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #service > p {
+        font-size: 24px;
+        padding-left: 15px;
+        padding-right: 15px;
+        padding-top: 20px;
+      }
+      
+      .service-box {
+        padding: 12px;
+      }
+      
+      .service-box img {
+        width: 100px;
+        height: 100px;
+      }
+      
+      .service-box p,
+      .service-box a {
+        font-size: 14px;
+      }
+      
+      .services-container,
+      .services-container1 {
+        margin: 15px;
+        gap: 12px;
+      }
+    }
+
+    @media (min-width: 1200px) {
+      .services-container,
+      .services-container1 {
+        max-width: 1400px;
+        margin: 60px auto;
+      }
+    }
   </style>
 </head>
 
